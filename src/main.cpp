@@ -56,17 +56,28 @@ int main() {
           double throttle_value;
 
           json msgJson;
-          // NOTE: Remember to divide by deg2rad(25) before you send the 
-          //   steering value back. Otherwise the values will be in between 
+          // NOTE: Remember to divide by deg2rad(25) before you send the
+          //   steering value back. Otherwise the values will be in between
           //   [-deg2rad(25), deg2rad(25] instead of [-1, 1].
           msgJson["steering_angle"] = steer_value;
           msgJson["throttle"] = throttle_value;
 
-          // Display the MPC predicted trajectory 
-          vector<double> mpc_x_vals;
-          vector<double> mpc_y_vals;
+          /*
+           * mpc_x,mpc_y, next_x, & next_y points are displayed in reference to the vehicle's coordinate system.
+           * The x axis always points in the direction of the car’s heading and the y axis points to the left of the car.
+           * If you want to display a point 10 units directly in front of the car, you could set next_x = {10.0} and next_y = {0.0}.
+           * Remember that the server returns waypoints using the map's coordinate system, which is different than the car's coordinate system.
+           * Transforming these waypoints will make it easier to both display them and to calculate the CTE and Epsi values for the model predictive controller.
+           */
 
-          /**
+          // Display the MPC predicted trajectory
+          vector<double> mpc_x_vals = {0.0};
+          vector<double> mpc_y_vals = {0.0};
+          // Display the waypoints/reference line
+          vector<double> next_x_vals = {10.0};
+          vector<double> next_y_vals = {0.0};
+
+          /**      
            * TODO: add (x,y) points to list here, points are in reference to 
            *   the vehicle's coordinate system the points in the simulator are 
            *   connected by a Green line
@@ -75,11 +86,7 @@ int main() {
           msgJson["mpc_x"] = mpc_x_vals;
           msgJson["mpc_y"] = mpc_y_vals;
 
-          // Display the waypoints/reference line
-          vector<double> next_x_vals;
-          vector<double> next_y_vals;
-
-          /**
+          /**      
            * TODO: add (x,y) points to list here, points are in reference to 
            *   the vehicle's coordinate system the points in the simulator are 
            *   connected by a Yellow line
@@ -127,6 +134,6 @@ int main() {
     std::cerr << "Failed to listen to port" << std::endl;
     return -1;
   }
-  
+
   h.run();
 }
