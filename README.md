@@ -3,6 +3,135 @@ Self-Driving Car Engineer Nanodegree Program
 
 ---
 
+# The Model
+
+## Structure
+
+My model is structured as followed:
+
+1. Once a measurement $[x ,y , \psi, v]$ comes, I convert (x, y) coordinates from global (map) Coordinate system to the local (vehicle) coordinate system, using `convert_to_vehicle_system(...)` free function (main.cpp, lines 24-35) .
+
+2. Then I typecast std::vector to Eigen::VectorXd and fit the waypoints to a 3rd grade polynomial (main.cpp, line 104) and evaluate the resulted coefficients (main.cpp, line 110).
+
+3. I use the result of the  polynomial fitting and it's evaluation to calculate CrossTrackError and $e \psi$. Current state (measurement from step 1) and these values are then used to calculate the next_state per measurement using free function `compute_next_state(...)` (main.cpp).
+
+4. `compute_next_state(...)` : since we're in the vehicle coordinate system, where vehicle position (x, y, psi) = (0, 0, 0), I override these values accordingly and calculate the new state using equations:
+
+   $x_{t+1} = x_t + v_t cos(\psi_t) * dt$
+   $y_{t+1} = y_t + v_t sin(\psi_t) * dt$
+   $\psi_{t+1} = \psi_t - \frac {v_t} { L_f} \delta_t * dt$	Here it is important to mention, that I use subtraction instead of addition due to the simulation environment
+   $v_{t+1} = v_t + a_t * dt$
+   $cte_{t+1} = f(x_t) - y_t + (v_t sin(e\psi_t) dt)$
+   $e\psi_{t+1} = \psi_t - \psi{des}_t + (\frac{v_t} { L_f} \delta_t dt)$
+
+5. Then the new state is used in Solve(...) member function of the Model Predictive Control (MPD.cpp, lines 139 -  268)
+
+6. `MPC::Solve()` : Essentially, here I create a large vector of the size 6 * 25+2 * 24 = 198, where
+
+   vars[0], ..., vars[24] -> $x_1, ..., x_{25}$
+
+   vars[25], ..., vars[49] -> $y_1, ..., y_{25}$
+
+   vars[50], ..., vars[74] -> $\psi_1, ..., \psi_{25}$
+
+   vars[75], ..., vars[99] -> $v_1, ..., v_{25}$
+
+   vars[100], ..., vars[124] -> $cte_1, ..., cte_{25}$
+
+   vars[125], ..., vars[149] -> $e\psi_1, ..., e\psi_{25}$
+
+   vars[150], ..., vars[173] -> $\delta_1, ..., \delta_{24}$
+
+   vars[174], ..., vars[197] -> $a_1, ..., a_{24}$
+
+   which I fill only with the new state, I've passed for $x_0, y_0, \psi_0, v_0, cte_0, e\psi_0$ 
+
+   I construct a vector vars_lowerbound ofconstraints for the delta of the steer angle (+-1.0e19), steer ange (+-25 degrees) and Acceleration (+-1).
+
+   I costruct 2 more vectors for constraints_lowerbound and constraints_upperbound which essentially hold the same values as my input state
+
+7. I initialize an object `fg_eval(coeffs)` (MPC.cpp, line 222) and string of options for further use in CppAD::ipopt::solve to calculate the optimal trajectory, using the waypoints and the constraints.
+
+8. `operator()` member function of the `FG_eval` class: it's vector fg at position [0] always holds the costs for the current trajectory. So I calculate this total costs by summing up the costs based on:
+
+   1. reference state (CTE, $e\psi$, $v$) and their multiplicators (verbose description in the [Parameters](#Parameters) section) in lines 28-37 of the MPC.cpp. smooth transition to the reference track.
+   2. actuator parameters (delta of the steering angle and acceleration) and their multiplicators (verbose description in the [Parameters](#Parameters) section) in lines 46-49 of the MPC.cpp. This allows smooth behavior in curves.
+   3. Deltas between the accelerations and steering angles between $t$ and $t+1& timestamps and their multiplicators (verbose description in the [Parameters](#Parameters) section) in lines 53-57 of the MPC.cpp. This allows smooth transition between actuator steps.
+   4. I copy/paste the constraints for the state in lines 69-74, which are the values from my input state vector.
+   5. Finally I calculate the new waypoints for the new N positions in a loop in lines 123-129 of the MPC.cpp with all given and pre-calculated values.
+
+   What is important, that for steering angle delta and the acceleration, I use the values not from the previous state, but from 2 states behind. That eliminates the shakiness at higher speeds, which is introduced by the latency. (MPC.cpp, lines 97 - 105).
+
+9. The `MPC::Solve()`  returns with the vector of values:
+
+   * [0] steer angle change
+   * [1] acceleration (throttle)
+   * [2 - N*2] one after another, x & y values of the correction trajectory.
+
+   which are then used for the actuator and visualization of the actual vehicle trajectory mpc_x_vals (green line).
+
+## Parameters
+
+Timestep Length and Elapsed Duration (N & dt) are chosen to be 7 and 0.1 correspondingly.
+
+The choice of Timestep length is described in section [Limitations (issues)](#Limitations (issues)). 
+
+Nonetheless, also following bundle of values worked fine for me:
+
+```c++
+const size_t N = 25;
+const double DT = 0.1;
+const double REF_V = 80;
+double const STEER_DIFF_COST = 500.0;
+```
+
+The Elapsed duration of 0.1 is chosen as a trade-off between performance optimization of the solver on the one hand and the length of the horizon on the other hand.
+
+The final set of the parameters is collected in `MPC.h`, lines 17-32:
+
+```c++
+const double Lf = 2.67;
+const size_t N = 7;
+const double DT = 0.1;
+const double REF_V = 70;
+const double CTE_COST = 50.0;
+const double EPSI_COST = 50.0;
+const double SPEED_COST = 1.0;
+const double STEER_COST = 20000.0;
+const double ACCELERATION_COST = 0.05;
+const double STEER_DIFF_COST = 200.0;
+const double ACCELERATION_DIFF_COST = 1.0;
+```
+
+Parameter tuning was one the most time-consuming tasks of this project.
+
+Here the vehicle reference speed is set to 70 mph to avoid unwanted problems due to latency and performance bottlenecks. However, 80mph works also well.
+
+I even managed to drive with 90mph using following parameters' set:
+
+```c++
+const size_t N = 10;
+const double REF_V = 90;
+double const STEER_DIFF_COST = 500.0;
+```
+
+### Limitations (issues)
+
+During parameter tuning, while having `const size_t N = 15+;`  I've noticed one weird issue, where visualization helped me a lot:
+
+![](./images/backloop.png)
+
+![](./images/backloop2.png)
+
+The issue is, that obviously the polynomial fitting and calculation of the vehicle trajectory in the curves takes too much time, the waypoints are not being updated by the simulation on time, so the vehicle reaches the end of the reference trajectory very fast and in the next step the trajectory calculation of the `CppAD::ipopt::solve(...)` navigates us back to the known waypoints.
+
+**Solution**: Setting `const size_t N = 7` solves the issue completely. This results in the smooth curve with an approppriate speed:
+
+![](./images/curve_final.png)
+
+
+# Auxiliary
+
 ## Dependencies
 
 * cmake >= 3.5
